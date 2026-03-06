@@ -2,6 +2,9 @@ name: Semgrep Vue3 Version Scanner
 
 on:
   workflow_dispatch:  # trigger manual จาก Actions tab
+  push :
+    branches:
+      - main
 
 jobs:
   semgrep-scan:
