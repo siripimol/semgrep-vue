@@ -52,7 +52,7 @@ jobs:
         run: sudo apt-get install -y cloc
 
       # ===================================================
-      # STEP 4: SAST + SCA Scan แต่ละ version
+      # STEP 4: SAST + SCA Scan แต่ละ version (command เดียว)
       # ===================================================
       - name: Run Semgrep scan
         run: |
@@ -74,15 +74,19 @@ jobs:
               continue
             }
 
-            # --- SAST ---
-            SAST_FILE="../results/${VERSION}_sast.json"
+            OUTPUT_FILE="../results/${VERSION}.json"
 
-            semgrep scan \
+            # SAST + SCA ใน command เดียว → ขึ้น Cloud UI ครบ
+            SEMGREP_BRANCH="release/$VERSION" \
+            SEMGREP_REPO_NAME="vuejs/core" \
+            SEMGREP_COMMIT="$VERSION" \
+            semgrep ci \
               --config "p/default" \
               --config "p/javascript" \
               --config "p/typescript" \
               --config "p/security-audit" \
               --config "p/owasp-top-ten" \
+              --supply-chain \
               --exclude="*__tests__*" \
               --exclude="*__mocks__*" \
               --exclude="*examples*" \
@@ -93,47 +97,19 @@ jobs:
               --include="*.js" \
               --include="*.vue" \
               --json \
-              --output "$SAST_FILE" \
-              . || true
+              --output "$OUTPUT_FILE" || true
 
-            SAST_COUNT=$(python3 -c "
+            TOTAL_COUNT=$(python3 -c "
           import json
           try:
-            d = json.load(open('$SAST_FILE'))
-            print(len(d.get('results', [])))
-          except:
-            print('?')
-          ")
-            echo "SAST: $VERSION -> $SAST_COUNT findings"
-
-            # --- SCA (Supply Chain / CVE) ---
-            SCA_FILE="../results/${VERSION}_sca.json"
-
-            SEMGREP_BRANCH="release/$VERSION" \
-            SEMGREP_REPO_NAME="vuejs/core" \
-            SEMGREP_COMMIT="$VERSION" \
-            semgrep ci \
-              --supply-chain \
-              --exclude="*__tests__*" \
-              --exclude="*__mocks__*" \
-              --exclude="*examples*" \
-              --exclude="*size-check*" \
-              --exclude="*template-explorer*" \
-              --exclude="*runtime-test*" \
-              --json \
-              --output "$SCA_FILE" || true
-
-            SCA_COUNT=$(python3 -c "
-          import json
-          try:
-            d = json.load(open('$SCA_FILE'))
+            d = json.load(open('$OUTPUT_FILE'))
             results = d.get('results', [])
-            cve_list = [r.get('extra',{}).get('metadata',{}).get('cve','') for r in results if r.get('extra',{}).get('metadata',{}).get('cve','')]
+            cve_list = [r for r in results if r.get('extra',{}).get('metadata',{}).get('cve','')]
             print(f'total={len(results)} cve={len(cve_list)}')
           except:
             print('?')
           ")
-            echo "SCA:  $VERSION -> $SCA_COUNT"
+            echo "Done: $VERSION -> $TOTAL_COUNT"
           done
 
       # ===================================================
@@ -156,7 +132,7 @@ jobs:
               --exclude-dir=__tests__,__mocks__,examples,size-check,template-explorer,runtime-test \
               --include-lang=TypeScript,JavaScript \
               --json \
-              --out=/tmp/cloc_tmp.json|| true
+              --out=/tmp/cloc_tmp.json 2>/dev/null || true
 
             TS=$(python3 -c "import json; d=json.load(open('/tmp/cloc_tmp.json')); print(d.get('TypeScript',{}).get('code',0))" 2>/dev/null || echo 0)
             JS=$(python3 -c "import json; d=json.load(open('/tmp/cloc_tmp.json')); print(d.get('JavaScript',{}).get('code',0))" 2>/dev/null || echo 0)
@@ -188,32 +164,19 @@ jobs:
           except:
             pass
 
-          print('\n=== SAST Summary ===')
-          print(f\"{'Version':<12} {'LOC':>8} {'Findings':>10} {'Density/1KLOC':>15}\")
-          print('-' * 50)
+          print('\n=== Scan Summary ===')
+          print(f\"{'Version':<12} {'LOC':>8} {'Total':>8} {'CVEs':>6} {'Density/1KLOC':>15}\")
+          print('-' * 55)
 
-          for f in sorted(glob.glob('results/v*_sast.json')):
-            version = os.path.basename(f).replace('_sast.json','')
-            try:
-              d = json.load(open(f))
-              findings = len(d.get('results', []))
-              loc = loc_data.get(version, {}).get('total', 0)
-              density = round((findings / loc) * 1000, 4) if loc > 0 else 0
-              print(f'{version:<12} {loc:>8,} {findings:>10} {density:>15.4f}')
-            except Exception as e:
-              print(f'{version:<12} error: {e}')
-
-          print('\n=== Supply Chain (CVE) Summary ===')
-          print(f\"{'Version':<12} {'SCA Total':>10} {'CVEs':>8}\")
-          print('-' * 35)
-
-          for f in sorted(glob.glob('results/v*_sca.json')):
-            version = os.path.basename(f).replace('_sca.json','')
+          for f in sorted(glob.glob('results/v*.json')):
+            version = os.path.basename(f).replace('.json','')
             try:
               d = json.load(open(f))
               results = d.get('results', [])
-              cve_list = [r.get('extra',{}).get('metadata',{}).get('cve','') for r in results if r.get('extra',{}).get('metadata',{}).get('cve','')]
-              print(f'{version:<12} {len(results):>10} {len(cve_list):>8}')
+              cve_list = [r for r in results if r.get('extra',{}).get('metadata',{}).get('cve','')]
+              loc = loc_data.get(version, {}).get('total', 0)
+              density = round((len(results) / loc) * 1000, 4) if loc > 0 else 0
+              print(f'{version:<12} {loc:>8,} {len(results):>8} {len(cve_list):>6} {density:>15.4f}')
             except Exception as e:
               print(f'{version:<12} error: {e}')
           "
